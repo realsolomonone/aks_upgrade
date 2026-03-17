@@ -1,0 +1,124 @@
+# AKS Cluster Upgrade Guide
+
+**Cluster:** `developer-k8s-cluster`  
+**Resource Group:** `rg_vnet_developer`  
+**Current Control Plane Version:** `1.31.11`  
+**Target Version:** `1.32.10`
+
+-----
+
+## Current State
+
+|Node Pool|OS   |Current Version|VM Size        |Node Count|Max Pods|Status   |Mode  |
+|---------|-----|---------------|---------------|----------|--------|---------|------|
+|davepool |Linux|1.31.10        |Standard_E8s_v3|6         |110     |Succeeded|User  |
+|system   |Linux|1.30.14        |Standard_DS2_v2|3         |200     |Succeeded|System|
+
+-----
+
+## Available Upgrades
+
+`1.32.0, 1.32.1, 1.32.2, 1.32.3, 1.32.4, 1.32.5, 1.32.6, 1.32.7, 1.32.8, 1.32.9, 1.32.10`
+
+-----
+
+## Upgrade Steps
+
+### Step 1 — Upgrade the Control Plane Only
+
+```bash
+az aks upgrade \
+  --resource-group rg_vnet_developer \
+  --name developer-k8s-cluster \
+  --kubernetes-version 1.32.10 \
+  --control-plane-only
+```
+
+> Using `--control-plane-only` allows node pools to be upgraded independently on your own schedule.
+
+-----
+
+### Step 2 — Upgrade the `system` Node Pool
+
+> ⚠️ **The `system` pool is on `1.30.14` — two minor versions behind.** AKS only supports one minor version jump at a time. You must upgrade to `1.31.x` first, then to `1.32.x`.
+
+**First, upgrade to 1.31:**
+
+```bash
+az aks nodepool upgrade \
+  --resource-group rg_vnet_developer \
+  --cluster-name developer-k8s-cluster \
+  --name system \
+  --kubernetes-version 1.31.11
+```
+
+**Then, upgrade to 1.32:**
+
+```bash
+az aks nodepool upgrade \
+  --resource-group rg_vnet_developer \
+  --cluster-name developer-k8s-cluster \
+  --name system \
+  --kubernetes-version 1.32.10
+```
+
+-----
+
+### Step 3 — Upgrade the `davepool` Node Pool
+
+```bash
+az aks nodepool upgrade \
+  --resource-group rg_vnet_developer \
+  --cluster-name developer-k8s-cluster \
+  --name davepool \
+  --kubernetes-version 1.32.10
+```
+
+-----
+
+### Step 4 — Verify the Upgrade
+
+```bash
+az aks show \
+  --resource-group rg_vnet_developer \
+  --name developer-k8s-cluster \
+  --output table
+
+az aks nodepool list \
+  --resource-group rg_vnet_developer \
+  --cluster-name developer-k8s-cluster \
+  --output table
+```
+
+-----
+
+## Optional: Speed Up with Max Surge
+
+Add `--max-surge 1` to node pool upgrades to bring up a new node before draining the old one, reducing upgrade time.
+
+```bash
+az aks nodepool upgrade \
+  --resource-group rg_vnet_developer \
+  --cluster-name developer-k8s-cluster \
+  --name davepool \
+  --kubernetes-version 1.32.10 \
+  --max-surge 1
+```
+
+-----
+
+## Pre-Upgrade Checklist
+
+- [ ] Schedule upgrade during a low-traffic maintenance window
+- [ ] Ensure workloads have `PodDisruptionBudgets` configured to avoid downtime during node drain
+- [ ] Back up any critical workload configurations
+- [ ] Confirm `kubectl` is connected to the correct cluster context
+- [ ] Notify stakeholders of the maintenance window
+
+-----
+
+## Notes
+
+- Node pools are **cordoned and drained** during upgrade — pods will be rescheduled to available nodes
+- The `system` node pool runs critical cluster services; upgrade it carefully and verify stability before proceeding to `davepool`
+- Monitor upgrade progress in the Azure Portal under **Kubernetes service → Node pools**
