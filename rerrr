@@ -1,0 +1,7 @@
+Hey Zack — one option worth exploring before purchasing ELS is using a free Red Hat Developer Account (developers.redhat.com). It gives you access to RHEL and the latest patches at no cost for development/non-production use. The caveat is it's limited to a small number of systems and is technically for dev use only, so it may not be viable for production Apigee VMs depending on your compliance posture.
+
+That said, it could at least be used to test the patching process and validate the upgrade path before committing to ELS licensing.
+
+For production, if ELS is the route, purchasing directly through Red Hat (redhat.com/store) rather than Azure Marketplace is usually more straightforward — especially in govcloud where Marketplace availability can be limited as you noted.
+
+Happy to dig into this further with you and Chris.
