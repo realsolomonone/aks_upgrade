@@ -319,3 +319,26 @@ All components should show version `1.32.10` and `ProvisioningState: Succeeded`.
 - Monitor the Azure Portal under **Kubernetes service → Node pools** for visual progress
 - The `system` node pool must be upgraded carefully — it hosts core cluster services
 - Do not skip the intermediate `1.31.x` hop for the `system` pool; AKS will reject it
+
+############
+
+az tag update \
+  --resource-id $(az aks show \
+    --resource-group rg_vnet_developer \
+    --name developer-k8s-cluster \
+    --query id -o tsv) \
+  --operation Delete \
+  --tags aks-managed-cluster-name="" aks-managed-cluster-rg=""
+
+az aks show \
+  --resource-group rg_vnet_developer \
+  --name developer-k8s-cluster \
+  --query tags
+
+
+az aks upgrade \
+  --resource-group rg_vnet_developer \
+  --name developer-k8s-cluster \
+  --kubernetes-version 1.32.10 \
+  --control-plane-only
+
