@@ -122,3 +122,200 @@ az aks nodepool upgrade \
 - Node pools are **cordoned and drained** during upgrade — pods will be rescheduled to available nodes
 - The `system` node pool runs critical cluster services; upgrade it carefully and verify stability before proceeding to `davepool`
 - Monitor upgrade progress in the Azure Portal under **Kubernetes service → Node pools**
+
+
+######################
+
+
+# AKS Cluster Upgrade Guide
+
+**Cluster:** `developer-k8s-cluster`  
+**Resource Group:** `rg_vnet_developer`  
+**Current Control Plane Version:** `1.31.11`  
+**Target Version:** `1.32.10`
+
+-----
+
+## Current State
+
+|Node Pool|OS   |Current Version|VM Size        |Node Count|Max Pods|Status   |Mode  |
+|---------|-----|---------------|---------------|----------|--------|---------|------|
+|davepool |Linux|1.31.10        |Standard_E8s_v3|6         |110     |Succeeded|User  |
+|system   |Linux|1.30.14        |Standard_DS2_v2|3         |200     |Succeeded|System|
+
+**Auto Upgrade Type:** Patch  
+**Node Upgrade Channel:** Node Image
+
+-----
+
+## Available Upgrades
+
+`1.32.0, 1.32.1, 1.32.2, 1.32.3, 1.32.4, 1.32.5, 1.32.6, 1.32.7, 1.32.8, 1.32.9, 1.32.10`
+
+-----
+
+## Pre-Upgrade Checklist
+
+- [ ] Remove the conflicting `aks-managed-cluster-rg` tag (see Step 1 below)
+- [ ] Schedule upgrade during a low-traffic maintenance window
+- [ ] Ensure workloads have `PodDisruptionBudgets` configured to avoid downtime during node drain
+- [ ] Back up any critical workload configurations
+- [ ] Confirm `kubectl` is connected to the correct cluster context
+- [ ] Notify stakeholders of the maintenance window
+
+-----
+
+## Step 1 — Remove Conflicting Tag (Required Before Upgrade)
+
+The cluster has a tag `aks-managed-cluster-rg` which is reserved for internal AKS use. This **must be removed first** or the upgrade will fail with a `BadRequest` error.
+
+```bash
+# View current tags on the cluster
+az aks show \
+  --resource-group rg_vnet_developer \
+  --name developer-k8s-cluster \
+  --query tags
+
+# Remove the conflicting tag
+az tag update \
+  --resource-id $(az aks show \
+    --resource-group rg_vnet_developer \
+    --name developer-k8s-cluster \
+    --query id -o tsv) \
+  --operation Delete \
+  --tags aks-managed-cluster-rg=""
+```
+
+> ⚠️ **Going forward**, avoid any tags starting with `aks-managed-` on AKS resources. Use a different naming convention like `custom-cluster-rg` instead. AKS reserves all `aks-managed-` prefixed tags for internal use.
+
+-----
+
+## Step 2 — Upgrade the Control Plane
+
+```bash
+az aks upgrade \
+  --resource-group rg_vnet_developer \
+  --name developer-k8s-cluster \
+  --kubernetes-version 1.32.10 \
+  --control-plane-only
+```
+
+When prompted, type `y` for both confirmations:
+
+- *“Kubernetes may be unavailable during cluster upgrades. Are you sure? (y/N)”*
+- *“This will upgrade only the control plane to 1.32.10. Continue? (y/N)”*
+
+> Using `--control-plane-only` allows node pools to be upgraded separately on your own schedule. The `davepool` and `system` node pools will not be touched.
+
+**Expected duration:** 5–15 minutes
+
+### Monitor Progress
+
+In a second terminal, watch the upgrade status:
+
+```bash
+watch -n 10 az aks show \
+  --resource-group rg_vnet_developer \
+  --name developer-k8s-cluster \
+  --query "{state:provisioningState, version:kubernetesVersion}" \
+  --output table
+```
+
+You will see `provisioningState` transition: `Upgrading` → `Succeeded`
+
+-----
+
+## Step 3 — Upgrade the `system` Node Pool
+
+> ⚠️ **The `system` pool is on `1.30.14` — two minor versions behind.** AKS only supports one minor version jump at a time. You must upgrade to `1.31.x` first, then `1.32.x`.
+
+**First hop — upgrade to 1.31:**
+
+```bash
+az aks nodepool upgrade \
+  --resource-group rg_vnet_developer \
+  --cluster-name developer-k8s-cluster \
+  --name system \
+  --kubernetes-version 1.31.11
+```
+
+**Second hop — upgrade to 1.32:**
+
+```bash
+az aks nodepool upgrade \
+  --resource-group rg_vnet_developer \
+  --cluster-name developer-k8s-cluster \
+  --name system \
+  --kubernetes-version 1.32.10
+```
+
+> The `system` node pool runs critical cluster services (CoreDNS, metrics server, etc.). Verify cluster stability after each hop before proceeding.
+
+-----
+
+## Step 4 — Upgrade the `davepool` Node Pool
+
+`davepool` is only one minor version behind (`1.31.10`) so it can jump directly to `1.32.10`.
+
+```bash
+az aks nodepool upgrade \
+  --resource-group rg_vnet_developer \
+  --cluster-name developer-k8s-cluster \
+  --name davepool \
+  --kubernetes-version 1.32.10
+```
+
+### Optional: Speed Up with Max Surge
+
+Add `--max-surge 1` to bring up a new node before draining the old one, reducing upgrade time and minimizing disruption:
+
+```bash
+az aks nodepool upgrade \
+  --resource-group rg_vnet_developer \
+  --cluster-name developer-k8s-cluster \
+  --name davepool \
+  --kubernetes-version 1.32.10 \
+  --max-surge 1
+```
+
+-----
+
+## Step 5 — Verify the Upgrade
+
+```bash
+# Check control plane version
+az aks show \
+  --resource-group rg_vnet_developer \
+  --name developer-k8s-cluster \
+  --output table
+
+# Check all node pools
+az aks nodepool list \
+  --resource-group rg_vnet_developer \
+  --cluster-name developer-k8s-cluster \
+  --output table
+```
+
+All components should show version `1.32.10` and `ProvisioningState: Succeeded`.
+
+-----
+
+## Upgrade Order Summary
+
+```
+1. Remove aks-managed-cluster-rg tag
+2. Upgrade control plane → 1.32.10  (--control-plane-only)
+3. Upgrade system pool  → 1.31.11   (intermediate hop)
+4. Upgrade system pool  → 1.32.10   (final hop)
+5. Upgrade davepool     → 1.32.10   (single hop)
+6. Verify all components on 1.32.10
+```
+
+-----
+
+## Notes
+
+- Node pools are **cordoned and drained** during upgrade — pods are rescheduled to available nodes
+- Monitor the Azure Portal under **Kubernetes service → Node pools** for visual progress
+- The `system` node pool must be upgraded carefully — it hosts core cluster services
+- Do not skip the intermediate `1.31.x` hop for the `system` pool; AKS will reject it
